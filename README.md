@@ -2,3 +2,4 @@
 A notes manager script for Reaper
 This script combines notes from all levels - global - project - track - item - fx   into a single environment for management.
 It makes use of the default rich text editor on windows and Mac to go beyond just plain text.
+You can Contribute to future development by paying what you want at https://payhip.com/b/9HYDh
