@@ -16,7 +16,7 @@ local r = reaper
 local SCRIPT_NAME    = "stomata_notes"
 -- Build version, form yyyymmdd.hhmm.  Keep in sync with the @build header line;
 -- bump both every time the script is edited.
-local SCRIPT_VERSION = "20260622.1253"
+local SCRIPT_VERSION = "20260622.1408"
 local SCRIPT_URL     = "https://stomataaudio.com/"
 local EXT_SECTION  = "stomata_notes"
 local NOTE_EXT_KEY = "stomata_notes_note"   -- P_EXT key base
@@ -983,6 +983,13 @@ end
 -- MAIN DEFERRED FRAME
 -- ============================================================
 
+-- Forward declaration: project_is_ready() is defined later (see PRECONDITIONS),
+-- but frame() calls it. A `local function` is only visible after its definition
+-- line, so without this forward-declared local the call below would resolve to a
+-- nil global and error. Declaring the local here lets the later `function
+-- project_is_ready()` assign into this same upvalue.
+local project_is_ready
+
 local function frame()
   if not win_open then return end
 
@@ -1003,7 +1010,6 @@ local function frame()
     load_buf(TAB.GLOBAL)
   end
 
-  sync_selections()
   check_ext_changes()
 
   r.ImGui_SetNextWindowSize(ctx, 660, 540, r.ImGui_Cond_FirstUseEver())
@@ -1011,6 +1017,12 @@ local function frame()
   local win_flags = r.ImGui_WindowFlags_MenuBar()
   local visible, still_open = r.ImGui_Begin(ctx, SCRIPT_NAME, true, win_flags)
   win_open = still_open
+
+  -- Selection auto-sync queries ImGui item state (IsAnyItemActive), which is
+  -- only valid once the frame's window has been begun. It must run AFTER
+  -- ImGui_Begin -- calling it beforehand raised
+  -- "ImGui_IsAnyItemActive: expected a valid ImGui_Context*".
+  sync_selections()
 
   if visible then
     if r.ImGui_BeginMenuBar(ctx) then
@@ -1195,9 +1207,13 @@ local function frame()
       end
       r.ImGui_EndPopup(ctx)
     end
-
-    r.ImGui_End(ctx)
   end
+
+  -- ImGui_Begin is the special case that must ALWAYS be paired with End, even
+  -- when Begin returned false (window collapsed/clipped). Keeping End inside the
+  -- "if visible" block would unbalance the Begin/End stack the moment the user
+  -- collapses the window.
+  r.ImGui_End(ctx)
 
   if win_open then
     r.defer(frame)
@@ -1232,7 +1248,8 @@ end
 -- ============================================================
 
 -- Returns: ready (bool), why (string|nil) describing the missing precondition.
-local function project_is_ready()
+-- (Declared local earlier via forward declaration near MAIN DEFERRED FRAME.)
+function project_is_ready()
   local _, proj_file = r.EnumProjects(-1, "")
   local has_folder   = proj_file ~= nil and proj_file ~= ""
   local pname        = r.GetProjectName(0, "")
@@ -1264,8 +1281,6 @@ local function init()
     return
   end
 
-  ctx = r.ImGui_CreateContext(SCRIPT_NAME)
-
   -- Evaluate the save state up front.  If the project isn't ready we open on
   -- the Global tab (the only one usable) and advise the user once.
   local ready, why = project_is_ready()
@@ -1294,6 +1309,14 @@ local function init()
   load_buf(TAB.TRACK)
   load_buf(TAB.ITEM)
   load_buf(TAB.FX)
+
+  -- Create the ImGui context LAST, immediately before entering the defer loop.
+  -- ReaImGui garbage-collects a context that goes unused between defer cycles.
+  -- The blocking ShowMessageBox shown above for untitled projects can delay the
+  -- first frame long enough that a context created earlier gets reaped, which
+  -- surfaced as "ImGui_SetNextWindowSize: expected a valid ImGui_Context*".
+  -- Creating it here guarantees frame() is the first thing to touch it.
+  ctx = r.ImGui_CreateContext(SCRIPT_NAME)
 
   r.atexit(on_exit)
   r.defer(frame)
